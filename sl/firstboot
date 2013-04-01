@@ -1,0 +1,42 @@
+#!/usr/bin/perl -w
+
+use Socket;
+use strict;
+
+my $FQDN = `hostname`;
+chomp $FQDN;
+system("cp -f /var/lib/puppet/firstboot/resolv.conf /etc/resolv.conf");
+
+my $DONE = 0;
+while (!$DONE ) {
+
+  if ( ! ($FQDN =~ /truecarcorp.com$/ or $FQDN =~ /qwest.zag.com$/) ) {
+     print "ERROR: $FQDN does not have truecarcorp.com or qwest.zag.com in the hostname.";
+     exit -1;
+    };
+
+  my $n = inet_aton($FQDN) or die "ERROR Could not resolve $FQDN.  Try again";
+
+  my $address = inet_ntoa($n) ;
+
+  if ($address =~ /^[10\.|172\.]/) { $DONE = 1; }
+  else { system("dialog --stdout --msgbox \"IP address ($address) is out of range  Try again\" 9 55"); }
+}
+
+system("echo \"z_nodename=$FQDN\" >> /etc/facts");
+system("hostname $FQDN");
+#$DONE = system("puppet apply /etc/puppet/manifests/site.pp");
+#die ("cannot run puppet apply") if ($DONE==1);
+$DONE = system("puppet agent --test --fqdn=$FQDN");
+die ("cannot run puppet exit code: $DONE") if ($DONE!=512);
+system("puppet agent --test --fqdn=$FQDN");
+system("puppet agent --test --fqdn=$FQDN");
+system("puppet agent --test --fqdn=$FQDN");
+system("rm -rvf /etc/puppet/manifests/*");
+system("rm -rvf /etc/puppet/modules/*");
+system("rm -vf /etc/ssh/ssh_host_*");
+system("rm -rvf /root/.bash_history");
+system("rm -vf /var/log/*");
+system("rm -vf /var/log/*/*");
+system("rm -vf /etc/rc3.d/S11firstboot");
+system("reboot");

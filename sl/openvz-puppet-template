@@ -1,0 +1,105 @@
+#!/bin/bash
+# Template construction and configuration utility
+#
+ 
+set -o errexit
+set -o nounset
+
+root="/disk1/openvz_containers/buildcontainer-root"
+pkg="/disk1/openvz_containers/newvz_pkg"
+out="/disk1/openvz_containers/sl-6-puppetized_6.0_amd64.tar.gz"
+grep $root /etc/mtab && umount $root/var/cache/yum && echo "$root/var/cache/yum $root/dev/pts was mounted... now unmounted" || true
+rm -rf "$root" "$pkg"
+
+mkdir -p $root/var/lib/rpm $root/var/cache/yum $root/dev/pts
+
+mount --bind /disk1/openvz_containers/buildtemplate-data/yum $root/var/cache/yum
+
+rpm --root $root --initdb
+yumdownloader --destdir=$pkg sl-release
+rpm --root $root -ivh --nodeps $pkg/sl-release*rpm || true
+
+cp -f /etc/yum.repos.d/sl.repo $root/etc/yum.repos.d/
+cp -f /etc/yum.repos.d/sl-updates.repo $root/etc/yum.repos.d/
+#cp -f /etc/yum.repos.d/epel.repo $root/etc/yum.repos.d/
+#cp -f /etc/yum.repos.d/epel-testing.repo $root/etc/yum.repos.d/
+
+yum --installroot=$root -y install rpm yum \
+	basesystem coreutils openssh-clients openssh-server ed less \
+	vim-enhanced iptables logrotate crontabs gzip passwd rootfiles \
+	sudo tar tmpwatch gawk bc bzip2 joe mtr perl strace tcpdump \
+	telnet unzip vixie-cron wget zsh puppet dialog dhclient
+
+mkdir $root/var/lib/puppet/firstboot/
+cp -f /disk1/openvz_containers/resolv.conf $root/var/lib/puppet/firstboot/
+cp -f /etc/puppet/puppet.conf $root/etc/puppet/
+cp -f /disk1/openvz_containers/firstboot $root/etc/rc3.d/S11firstboot
+cp -f /disk1/openvz_containers/ifcfg-eth0 $root/etc/sysconfig/network-scripts/
+cp -f /disk1/openvz_containers/profile_d_firstboot.sh $root/etc/profile.d/
+chmod 755 $root/etc/rc3.d/S11firstboot
+
+umount $root/var/cache/yum
+
+# Set the same timezone as for host system
+[ -f /etc/localtime ] && cp -fp /etc/localtime $root/etc/localtime
+
+# Kill udevd
+sed -i 's|/sbin/start_udev|#/sbin/start_udev|g' $root/etc/rc.d/rc.sysinit
+chroot $root /sbin/MAKEDEV null zero full tty ptmx console random urandom stdin stdout stderr
+
+# Turn unneeded services off
+OFF_SERVICES="acpid rpcidmapd rpcgssd nfslock netfs portmap avahi-daemon avahi-dnsconfd pcscd bluetooth auditd autofs mcstrans messagebus restorecond haldaemon gpm lm_sensors"
+for S in $OFF_SERVICES; do
+	[ -f $root/etc/init.d/$S ] && chroot $root /sbin/chkconfig $S off
+done
+                                                                                
+# Turn needed services on
+ON_SERVICES="network iptables crond sshd rsyslog"
+for S in $ON_SERVICES; do
+	[ -f $root/etc/init.d/$S ] && chroot $root /sbin/chkconfig $S on
+done
+                                                                                
+# Convert system to shadow password files
+chroot $root /usr/sbin/pwconv
+
+# Disable root login
+chroot $root /usr/sbin/usermod -L root
+
+# Do not launch *getty on tty devices - they are not accessible from VPS
+sed -i -e '/getty/d' $root/etc/inittab
+
+# Mount /dev/pts
+echo "none	/dev/pts	devpts	rw	0 0" >> $root/etc/fstab
+
+# Disable fsync() in syslog
+if [ -f $root/etc/syslog.conf ]; then
+	sed -i -e 's@\([[:space:]]\)\(/var/log/\)@\1-\2@' $root/etc/rsyslog.conf
+fi
+
+# Remove unnecessary setuid bits
+find $root/ $root/usr -xdev -type f -perm +04000 | \
+        grep -vP '(/bin/(su|ping|traceroute)|/usr/bin/(passwd|sudo|chsh|crontab)|/usr/libexec/openssh/ssh-keysign)$' | \
+        xargs -r chmod ug-s 
+
+# Remove unnecessary setgid bits
+find $root/ $root/usr -xdev -type f -perm +02000 | \
+        grep -vP '(/usr/sbin/(postdrop|postqueue)|/usr/bin/ssh-agent)$' | \
+        xargs -r chmod g-s
+
+# Do not try to unload iptables modules
+if [ -f $root/etc/sysconfig/iptables-config ]; then
+	sed -i -e 's/^IPTABLES_MODULES_UNLOAD.*/IPTABLES_MODULES_UNLOAD=\"no\"/' $root/etc/sysconfig/iptables-config 
+fi
+
+# Assume we're not doing a multilib system.
+[ -f $root/etc/yum.conf ] && echo multilib_policy=best >> $root/etc/yum.conf
+
+# Link /etc/mtab to /proc/mounts
+rm -f $root/etc/mtab
+ln -s /proc/mounts $root/etc/mtab
+
+# Set non-interactive mode for initscripts (openvz bug #46)
+sed -i -e 's/^PROMPT=.*/PROMPT=no/' $root/etc/sysconfig/init
+
+rm -f $out || true
+tar --numeric-owner -C $root -czf $out .
