@@ -1,0 +1,57 @@
+#!/usr/bin/perl -w
+
+use Socket;
+use strict;
+
+sleep 30;
+
+my $FQDN = `hostname -f`;
+chomp $FQDN;
+my $repository = "repository";
+
+if ( $FQDN =~ /wc.truecarcorp.com/ ) { system("cp -f /var/lib/puppet/firstboot/resolv.conf.wc /etc/resolv.conf"); $repository = "repository1.common.wc.truecarcorp.com"; }
+if ( $FQDN =~ /wr.truecarcorp.com/ ) { system("cp -f /var/lib/puppet/firstboot/resolv.conf.wr /etc/resolv.conf"); $repository = "repository1.common.wr.truecarcorp.com"; }
+if ( $FQDN =~ /wb.truecarcorp.com/ ) { system("cp -f /var/lib/puppet/firstboot/resolv.conf.wb /etc/resolv.conf"); $repository = "repository1.common.wb.truecarcorp.com"; }
+if ( $FQDN =~ /bw.truecarcorp.com/ ) { system("cp -f /var/lib/puppet/firstboot/resolv.conf.bw /etc/resolv.conf"); $repository = "repository1.common.bw.truecarcorp.com"; }
+
+system("echo 'deb http://archive.ubuntu.com/ubuntu lucid-updates main' >> /etc/apt/sources.list");
+system("echo 'deb http://$repository/ubuntu/ lucid contrib' >> /etc/apt/sources.list");
+system("apt-get update");
+system("apt-get update");
+system("apt-get update");
+system("apt-get upgrade -y --force-yes");
+system("apt-get install -y --force-yes puppet rsyslog-relp");
+
+system("cp -f /var/lib/puppet/firstboot/puppet.conf /etc/puppet/puppet.conf");
+
+my $DONE = 0;
+while (!$DONE ) {
+
+  if ( ! ($FQDN =~ /truecarcorp.com$/ or $FQDN =~ /qwest.zag.com$/) ) {
+     print "ERROR: $FQDN does not have truecarcorp.com or qwest.zag.com in the hostname.";
+     exit -1;
+    };
+
+  my $n = inet_aton($FQDN) or die "ERROR Could not resolve $FQDN.  Try again";
+
+  my $address = inet_ntoa($n) ;
+
+  if ($address =~ /^[10\.|172\.]/) { $DONE = 1; }
+  else { exit -1 }
+}
+
+system("echo \"z_nodename=$FQDN\" > /etc/facts");
+system("echo \"z_nagios_monitor=no\" >> /etc/facts");
+system("hostname $FQDN");
+system("puppet agent --test --fqdn=$FQDN");
+system("puppet agent --test --fqdn=$FQDN");
+system("puppet agent --test --fqdn=$FQDN");
+system("puppet agent --test --fqdn=$FQDN");
+system("rm -rvf /etc/puppet/manifests/*");
+system("rm -rvf /etc/puppet/modules/*");
+system("rm -rvf /root/.bash_history");
+system("rm -vf /var/log/*");
+system("rm -vf /var/log/*/*");
+system("perl -pi -e 's/.*firstboot.*//g' /etc/rc.local");
+system("perl -pi -e 's/oom never/\#oom never/g' /etc/init/ssh.conf");
+system("reboot");
